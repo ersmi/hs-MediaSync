@@ -1,11 +1,13 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-import Control.Concurrent           (forkIO)
-import Control.Monad                (forever, unless)
+import Control.Concurrent           (forkIO, threadDelay, killThread)
+import Control.Monad                (forever, unless, when)
 import Control.Monad.Trans          (liftIO)
 import Data.Text                    (Text)
 import Network.Socket               (withSocketsDo)
 import System.Directory             (getDirectoryContents)
+import System.Environment           (getArgs)
+import qualified GHC.Conc.Sync      (ThreadId)
 import qualified Data.ByteString     as B
 import qualified Data.Text           as T
 import qualified Data.Text.IO        as T
@@ -18,6 +20,7 @@ app conn = do
     putStrLn "Connected!"
     printHelp
     hostname <- readConfig "CLIENT" "hostname"
+    dir <- readConfig "CLIENT" "dir"
     W.sendTextData conn (T.pack hostname)
     -- Fork a thread that writes WS data to stdout
     _ <- forkIO $ forever $ do
@@ -37,6 +40,22 @@ app conn = do
                 where 
                     msglist = tail $ T.splitOn ", " msg
                     op = head $ T.splitOn ", " msg
+
+    -- Fork listener on folder if -d is passed.
+    daemon <- forkIO $ forever $ do
+        currentfiles <- getDirectoryContents dir
+        newfiles <- checkfolder currentfiles dir
+        if newfiles
+            then do -- Send request for binaries from server.
+                str <- (getDirectoryContents dir)
+                let s = ["push", dir] ++ (reverse (drop 2 (reverse str)))
+                W.sendTextData conn (T.intercalate (", ") (map T.pack s))
+            else
+                threadDelay 100000000 -- 10 seconds
+
+    -- TODO: Instead of removing thread if -d isn't passed,
+    --       Only fork if -d is read.
+    daemoncheck <- checkArgs daemon
 
     -- Read from stdin and write to WS
     let loop = do
@@ -62,10 +81,25 @@ app conn = do
                         -- Disconnect from server.
                         disconnect conn hostname 
                     | otherwise -> unless (T.null line) $ W.sendTextData conn line >> loop
+
+    -- TODO: Do not loop if -d passed.
     loop
 
 disconnect :: W.Connection -> [Char] -> IO ()
 disconnect conn hostname = W.sendClose conn (T.pack $ hostname ++ " disconnected.")
+
+checkfolder foldercontents dir = do
+    threadDelay 10000000 -- 10 seconds
+    newfoldercontents <- (getDirectoryContents dir)
+    case newfoldercontents of
+        _   | newfoldercontents == foldercontents -> return True
+            | otherwise                           -> return False
+
+checkArgs :: GHC.Conc.Sync.ThreadId -> IO ()
+checkArgs thread = do
+    args <- getArgs
+    when (not (elem "-d" args)) (killThread thread)
+    return ()
 
 printHelp = do
     putStrLn $ "ls \t - Display files unique to each dir\n" ++

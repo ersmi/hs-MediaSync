@@ -17,3 +17,13 @@ cabal.sandbox.config
 *.eventlog
 .stack-work/
 cabal.project.local
+
+# testing files/folders
+serverfolder/
+clientfolder/
+
+# Keep default config on repo
+config.cfg
+
+# ghc binaries
+*.exe
